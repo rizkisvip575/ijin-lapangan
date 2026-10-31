@@ -1,10 +1,11 @@
-/* Penghubung penyimpanan: API Node.js + Server-Sent Events untuk pembaruan langsung.
-   Bentuk API sengaja menyerupai collection/doc yang dipakai aplikasi:
+/* Penghubung penyimpanan: API server (Vercel + Supabase) dengan pembaruan
+   berkala. Bentuk API sengaja menyerupai collection/doc yang dipakai aplikasi:
    DB.collection(nama).doc(id).set / update / delete / get
    DB.collection(nama).get / onSnapshot */
 (function () {
   'use strict';
 
+  var POLL_MS = 4000;
   var enc = encodeURIComponent;
 
   async function request(url, options) {
@@ -27,23 +28,28 @@
     return text ? JSON.parse(text) : null;
   }
 
-  function listCollection(name) {
-    if (name === 'lampiran') {
-      return request('/api/lampiran').then(function (rows) {
-        return (rows || []).map(function (row) {
-          return { id: row.id, data: function () { return row; } };
-        });
-      });
-    }
-    return request('/api/collections/' + enc(name)).then(function (rows) {
-      return (rows || []).map(function (row) {
-        return { id: row.id, data: function () { return row; } };
-      });
+  function toDocs(rows) {
+    return (rows || []).map(function (row) {
+      return { id: row.id, data: function () { return row; } };
     });
+  }
+
+  function listCollection(name) {
+    if (name === 'lampiran') return request('/api/lampiran').then(toDocs);
+    return request('/api/collections/' + enc(name)).then(toDocs);
   }
 
   function getLampiran(id) {
     return request('/api/lampiran/' + enc(id)).then(function (data) {
+      return { exists: true, data: function () { return data; } };
+    }, function (err) {
+      if (err.status === 404) return { exists: false, data: function () { return null; } };
+      throw err;
+    });
+  }
+
+  function getDoc(name, id) {
+    return request('/api/collections/' + enc(name) + '/' + enc(id)).then(function (data) {
       return { exists: true, data: function () { return data; } };
     }, function (err) {
       if (err.status === 404) return { exists: false, data: function () { return null; } };
@@ -67,48 +73,71 @@
         return request(path, { method: 'DELETE' });
       },
       get: function () {
-        if (name === 'lampiran') return getLampiran(id);
-        return request('/api/collections/' + enc(name)).then(function (rows) {
-          var hit = (rows || []).find(function (row) { return row.id === id; });
-          return hit
-            ? { exists: true, data: function () { return hit; } }
-            : { exists: false, data: function () { return null; } };
-        });
+        return isLampiran ? getLampiran(id) : getDoc(name, id);
       }
     };
   }
 
-  var source = null;
   var listeners = {};
+  var rev = 0;
+  var pollTimer = null;
+  var polling = false;
 
-  function ensureEvents() {
-    if (source || typeof EventSource === 'undefined') return;
-    source = new EventSource('/api/events');
-    source.onmessage = function (event) {
-      var payload = null;
-      try { payload = JSON.parse(event.data); } catch (e) { return; }
-      var col = payload && payload.col;
-      if (!col) return;
-      (listeners[col] || []).forEach(function (fn) { fn(); });
-    };
-    source.onerror = function () {
-      /* EventSource mencoba menyambung ulang sendiri. */
-    };
+  function notify(col) {
+    (listeners[col] || []).forEach(function (fn) { fn(); });
+  }
+
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      var query = rev ? '?since=' + enc(rev) : '';
+      var result = await request('/api/changes' + query);
+      if (result && typeof result.rev === 'number') rev = result.rev;
+      var changed = (result && result.cols) || [];
+      changed.forEach(notify);
+    } catch (e) {
+      /* Jaringan putus: muat ulang semua data yang sedang ditampilkan. */
+      Object.keys(listeners).forEach(notify);
+    } finally {
+      polling = false;
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(poll, POLL_MS);
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
 
   function makeCollection(name) {
     return {
       doc: function (id) { return makeDoc(name, id); },
       get: function () { return listCollection(name).then(function (docs) { return { docs: docs }; }); },
+      /* simpan banyak dokumen dalam satu permintaan (data contoh / import) */
+      setMany: function (items) {
+        var docs = (items || []).map(function (item) {
+          return { id: item[0], data: item[1] };
+        });
+        if (!docs.length) return Promise.resolve({ ok: true, count: 0 });
+        return request('/api/collections/' + enc(name), {
+          method: 'POST',
+          body: JSON.stringify({ docs: docs })
+        });
+      },
       onSnapshot: function (next, error) {
         var closed = false;
         var timer = null;
-        var loaded = false;
 
         function load() {
           if (closed) return;
           listCollection(name).then(function (docs) {
-            if (!closed) { loaded = true; next({ docs: docs }); }
+            if (!closed) next({ docs: docs });
           }).catch(function (err) {
             if (!closed && error) error(err);
           });
@@ -122,13 +151,14 @@
 
         listeners[name] = listeners[name] || [];
         listeners[name].push(schedule);
-        ensureEvents();
         load();
+        startPolling();
 
         return function unsubscribe() {
           closed = true;
           if (timer) clearTimeout(timer);
           listeners[name] = (listeners[name] || []).filter(function (fn) { return fn !== schedule; });
+          if (!Object.keys(listeners).some(function (key) { return listeners[key].length; })) stopPolling();
         };
       }
     };
@@ -136,14 +166,23 @@
 
   window.ServerDB = {
     create: async function () {
+      var health;
       try {
-        await request('/api/health');
+        health = await request('/api/health');
       } catch (e) {
         return null;
       }
-      var db = { collection: makeCollection };
+      if (!health || !health.ok) return null;
+
+      /* rev awal supaya perubahan berikutnya bisa dideteksi. */
+      try {
+        var initial = await request('/api/changes');
+        if (initial && typeof initial.rev === 'number') rev = initial.rev;
+      } catch (e) { /* polling akan menyusul */ }
+
+      var db = { collection: makeCollection, mode: health.store };
       db.close = function () {
-        if (source) { source.close(); source = null; }
+        stopPolling();
         listeners = {};
       };
       return db;

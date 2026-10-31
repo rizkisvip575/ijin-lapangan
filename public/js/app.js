@@ -281,7 +281,9 @@ async function batalkan(id){
 /* isi banyak dokumen sekaligus: lokal ditulis sekali, server dikirim per kelompok */
 async function bulk(col,items){
   if(!DB){items.forEach(it=>{const i=S[col].findIndex(x=>x.id===it[0]);const o=Object.assign({id:it[0]},it[1]);if(i>=0)S[col][i]=o;else S[col].push(o);});persistLocal();scheduleRender();return;}
-  for(let i=0;i<items.length;i+=10)await Promise.all(items.slice(i,i+10).map(it=>DB.collection(col).doc(it[0]).set(it[1])));
+  const c=DB.collection(col);
+  if(c&&typeof c.setMany==='function'){await c.setMany(items);return;}
+  for(let i=0;i<items.length;i+=10)await Promise.all(items.slice(i,i+10).map(it=>c.doc(it[0]).set(it[1])));
 }
 async function reassignGuard(me,p){return !!me&&(peranOf(me)==='superadmin'||(scopeOf(me)&&visIds(me).has(p.karyawanId)));}
 async function toggleLokasi(){
@@ -323,7 +325,7 @@ function view(){
   return appView(me);
 }
 function connPill(){
-  return DB?'<span class="pill-conn"><i></i>Tersambung ke server, data tampil real-time</span>'
+  return DB?'<span class="pill-conn"><i></i>Tersambung ke server, data tersinkron otomatis</span>'
            :'<span class="pill-conn off"><i></i>Mode lokal: server tidak terhubung, data tersimpan di browser ini</span>';
 }
 function loginView(){

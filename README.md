@@ -1,92 +1,120 @@
-# Izin Lapangan (Node.js)
+# Izin Lapangan
 
-Aplikasi pengajuan izin sakit, cuti, dan izin lainnya untuk karyawan lapangan, dengan persetujuan berjenjang 0 → 1 → 2 → 3 → 4. Ini adalah versi Node.js dari artifact HTML `Izin_Lapangan_mandiri_Rev_Fix Kali.html`: tampilan, aturan bisnis, dan data contohnya sama, tetapi data sekarang disimpan di server sehingga dipakai bersama oleh semua pengguna dan diperbarui langsung di semua perangkat.
+Aplikasi pengajuan izin sakit, cuti, dan izin lapangan dengan persetujuan berjenjang. Frontend berupa satu halaman statis, backend Express yang berjalan sebagai fungsi serverless di Vercel, dan data disimpan di Supabase (Postgres).
 
-## Menjalankan
+## Cara kerja
 
-Butuh Node.js 18 atau lebih baru.
+| Bagian | Teknologi | Lokasi |
+| --- | --- | --- |
+| Frontend | HTML + CSS + JS tanpa build framework | `public/` (disalin ke `dist/` saat build) |
+| API | Express, satu fungsi serverless | `lib/app.js`, `api/[...path].js` |
+| Data | Supabase Postgres lewat PostgREST | `lib/store-supabase.js` |
+| Mode lokal | File JSON di `data/` | `lib/store-file.js` |
+
+Server memilih penyimpanan otomatis: jika `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` ada, data masuk ke Supabase. Jika tidak, data disimpan di `data/db.json` (hanya untuk mencoba di komputer).
+
+Data dibagi menjadi lima koleksi: `karyawan`, `jabatan`, `pengajuan`, `absensi`, dan `lampiran` (foto/PDF surat, sudah dikompres di browser menjadi data URL kecil).
+
+## Menjalankan di komputer
 
 ```bash
 npm install
 npm start
 ```
 
-Buka http://localhost:3000.
+Buka http://localhost:3000. Tanpa konfigurasi Supabase, aplikasi memakai penyimpanan file lokal dan menampilkan label "Tersambung ke server" bila API aktif. Tekan **Muat data contoh** untuk mengisi 769 karyawan dan akun demo.
 
-Untuk pengembangan dengan restart otomatis:
+Untuk mencoba dengan Supabase sungguhan dari komputer:
 
 ```bash
-npm run dev
+cp .env.example .env    # lalu isi dua nilainya
+npm start
 ```
 
-Port dapat diganti lewat variabel lingkungan `PORT` (misalnya `PORT=8080 npm start`). Server mendengarkan di `0.0.0.0` agar bisa diakses dari ponsel di jaringan yang sama.
+## Deploy ke Vercel + Supabase
 
-## Pertama kali dipakai
+### 1. Siapkan Supabase
 
-1. Buka aplikasi. Jika belum ada data, tekan **Muat data contoh** untuk mengisi 5 akun pengelola, 764 karyawan contoh, dan beberapa pengajuan.
-2. Masuk memakai nama lengkap dan NIK. Akun contoh:
-   - `Super Admin` / `SA-001`
-   - `Admin 1` / `ADM-001` (akses Produksi-SMD)
-   - `Admin 2` / `ADM-002` (akses Produksi-OB)
-   - `Admin 3` / `ADM-003` (akses Produksi-CH)
-   - `Admin 4` / `ADM-004` (akses Administrasi, CMS, NSID, Produksi-SMC, SHE, Workshop & Logistic)
-3. Tombol akun demo di halaman masuk mengisi nama dan NIK secara otomatis.
+1. Buat project baru di https://supabase.com/dashboard.
+2. Buka **SQL Editor → New query**, tempel seluruh isi `supabase/schema.sql`, lalu **Run**. Skrip ini membuat tabel `documents`, sequence `rev`, trigger, dan mengunci tabel dengan RLS.
+3. Buka **Project Settings → API**, catat:
+   - **Project URL** → `SUPABASE_URL`
+   - **service_role secret** → `SUPABASE_SERVICE_ROLE_KEY`
 
-Alternatif tanpa data contoh: **Mulai tanpa data contoh**, lalu buat Super Admin pertama. Data asli bisa dimuat lewat **Pengaturan → Import Data Excel** atau **Sinkron manpower dari Excel** (khusus Super Admin).
+Service role key hanya boleh dipakai di server. Jangan menaruhnya di kode frontend, dan jangan meng-commit file `.env`.
 
-## Login dan hak akses
+### 2. Unggah kode ke GitHub
 
-Login memakai nama persis seperti data HR dan NIK, tanpa kata sandi. Ini mengikuti perilaku versi HTML aslinya: aplikasi ditujukan untuk jaringan internal, bukan internet publik. Siapa pun yang bisa membuka server dapat membaca dan mengubah data. Jika akan dipublikasikan, tambahkan autentikasi (misalnya reverse proxy dengan SSO) di depan aplikasi.
+```bash
+git add .
+git commit -m "Deploy Izin Lapangan ke Vercel dan Supabase"
+git push
+```
 
-Peran ditentukan oleh jabatan:
+### 3. Impor project di Vercel
 
-- **Karyawan** mengajukan izin.
-- **Pengawas** (Foreman/Supervisor/Leader/Officer/Koordinator, Superintendent/Penanggung Jawab/Kabag/HC, Deputy PM, PJO) menyetujui atau menolak.
-- **Admin** melihat data sesuai departemen yang diberikan.
-- **Super Admin** melihat semua departemen dan dapat mengelola jabatan, approver, import, serta reset data.
+1. https://vercel.com/new → pilih repository GitHub ini → **Import**.
+2. Framework Preset: **Other**. Build Command dan Output Directory sudah diatur di `vercel.json` (`npm run build` → `dist`).
+3. Pada **Environment Variables**, tambahkan (untuk Production, Preview, dan Development):
 
-## Penyimpanan data
+   | Nama | Nilai |
+   | --- | --- |
+   | `SUPABASE_URL` | Project URL Supabase |
+   | `SUPABASE_SERVICE_ROLE_KEY` | service_role key Supabase |
 
-Data ditulis ke folder `data/`:
+4. **Deploy**. Setelah selesai, buka domain Vercel-nya, tekan **Muat data contoh**, lalu masuk dengan akun demo.
 
-- `data/db.json` — koleksi `karyawan`, `jabatan`, `pengajuan`, dan `absensi`.
-- `data/lampiran/<id>.json` — lampiran surat (foto/PDF) dalam bentuk data URL.
+Setiap `git push` ke branch yang terhubung akan men-deploy ulang otomatis.
 
-Folder dan file dibuat otomatis saat pertama kali menulis. Hentikan server lalu salin folder `data/` untuk mencadangkan, dan kembalikan folder itu untuk memulihkan. File data tidak masuk Git (lihat `.gitignore`).
+## Akun demo
 
-Penyimpanan ini berbasis file JSON dan cocok untuk satu proses server. Jangan menjalankan beberapa instance terhadap folder data yang sama.
+| Nama | NIK | Peran |
+| --- | --- | --- |
+| Super Admin | `SA-001` | Super Admin (semua departemen, import, reset) |
+| Admin 1 | `ADM-001` | Admin Produksi-SMD |
+| Admin 2 | `ADM-002` | Admin Produksi-OB |
+| Admin 3 | `ADM-003` | Admin Produksi-CH |
+| Admin 4 | `ADM-004` | Admin Administrasi + 6 departemen lain |
+
+Data contoh juga membuat akun pengawas dan karyawan. Daftar akun demo muncul di halaman login setelah data contoh dimuat.
 
 ## API
 
-Semua endpoint mengembalikan JSON.
-
-| Metode | Endpoint | Keterangan |
+| Metode | Rute | Keterangan |
 | --- | --- | --- |
-| GET | `/api/health` | Cek server |
-| GET | `/api/collections/:col` | Daftar dokumen (`karyawan`, `jabatan`, `pengajuan`, `absensi`) |
-| PUT/POST | `/api/collections/:col/:id` | Simpan/timpa dokumen |
-| PATCH | `/api/collections/:col/:id` | Ubah sebagian field |
+| GET | `/api/health` | Status server dan jenis penyimpanan (`file` / `supabase`) |
+| GET | `/api/changes?since=<rev>` | Koleksi yang berubah sejak `rev` tertentu |
+| GET | `/api/collections/:col` | Semua dokumen dalam koleksi |
+| POST | `/api/collections/:col` | Simpan banyak dokumen: `{ "docs": [{ "id", "data" }] }` |
+| GET | `/api/collections/:col/:id` | Satu dokumen |
+| PUT / POST | `/api/collections/:col/:id` | Timpa dokumen |
+| PATCH | `/api/collections/:col/:id` | Gabung sebagian field |
 | DELETE | `/api/collections/:col/:id` | Hapus dokumen |
 | GET | `/api/lampiran` | Daftar id lampiran |
-| GET/PUT/DELETE | `/api/lampiran/:id` | Baca, simpan, atau hapus lampiran |
-| GET | `/api/events` | Server-Sent Events; mengirim `{ "col": "..." }` setiap ada perubahan |
+| GET / PUT / DELETE | `/api/lampiran/:id` | Isi lampiran |
 
-Batas ukuran body request adalah 12 MB.
+`col` adalah salah satu dari `karyawan`, `jabatan`, `pengajuan`, `absensi`.
 
-## Struktur proyek
+Pembaruan tampilan memakai polling ringan: browser memanggil `/api/changes` setiap 4 detik dan hanya memuat ulang koleksi yang benar-benar berubah. Ini menggantikan Server-Sent Events agar cocok dengan fungsi serverless.
+
+## Struktur
 
 ```
-server.js              Server Express: API, penyimpanan JSON, SSE, file statis
-public/index.html      Kerangka halaman
-public/styles.css      Seluruh tampilan (tema terang/gelap)
-public/js/db.js        Adaptor browser: REST + SSE untuk data bersama
-public/js/app.js       Logika aplikasi (UI, alur persetujuan, laporan, import)
-public/js/seed-data.js Data contoh: departemen dan jabatan
-public/js/seed-rows.js, seed-rows-2.js, seed-rows-3.js  Baris karyawan contoh
+api/[...path].js        Titik masuk fungsi Vercel untuk semua /api/*
+lib/app.js              Definisi rute dan pemilihan penyimpanan
+lib/store-supabase.js   Driver Supabase (PostgREST)
+lib/store-file.js       Driver file JSON untuk pengembangan lokal
+server.js               Server lokal (npm start)
+scripts/build.js        Menyalin public/ ke dist/ saat build Vercel
+public/                 Aplikasi (HTML, CSS, JS, data contoh)
+supabase/schema.sql     Tabel, trigger rev, dan kebijakan RLS
+vercel.json             Build dan pengaturan fungsi
 ```
 
 ## Catatan
 
-- Fitur Excel (unduh laporan, template import, manpower) memakai pustaka `xlsx` dari CDN, jadi browser perlu koneksi internet saat memakai fitur tersebut.
-- Semua keputusan persetujuan, absensi otomatis, pembatalan, dan laporan berjalan di browser seperti versi aslinya; server hanya menyimpan data dan menyiarkan perubahan.
-- Belum ada unggahan file multipart: lampiran dikirim sebagai data URL dan disimpan sebagai JSON, sama seperti format data di HTML aslinya.
+- **Login belum memakai kata sandi.** Siapa pun yang tahu NIK dapat masuk. Karena situs ini publik di internet, pasang autentikasi (misalnya Supabase Auth) sebelum dipakai dengan data sungguhan. Skema RLS saat ini menutup akses langsung dari browser; semua akses lewat API server.
+- Import Excel memakai pustaka `xlsx` dari CDN, jadi browser perlu koneksi internet untuk fitur Excel.
+- Batas body fungsi Vercel adalah 4,5 MB; lampiran sudah dibatasi sekitar 190 KB (foto) dan 150 KB (PDF), jadi aman.
+- Data contoh memuat 769 karyawan dalam beberapa permintaan bulk, jauh di bawah batas waktu fungsi.
+- Backup: gunakan **Database → Backups** di Supabase, atau ekspor tabel `documents` lewat SQL Editor.
