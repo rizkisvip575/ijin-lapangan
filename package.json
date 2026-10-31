@@ -1,0 +1,17 @@
+{
+  "name": "izin-lapangan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi pengajuan izin sakit, cuti, dan izin lapangan dengan persetujuan berjenjang.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
